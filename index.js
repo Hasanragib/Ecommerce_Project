@@ -1,12 +1,13 @@
 const express = require("express");
 const app = express();
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
 
 require("dotenv").config();
 
 const { initializeDatabase } = require("./db/db.connect.js");
 
-const Product = require("./models/product.models");
+const Product = require("./models/product.models.js");
 const User = require("./models/user.models.js");
 
 const corsOptions = {
@@ -20,39 +21,49 @@ app.use(express.json());
 
 initializeDatabase();
 
+// Friendly landing route for Vercel root URL
+app.get("/", (req, res) => {
+  res.status(200).json({
+    message: "Welcome to the E-Commerce Backend API!",
+    status: "Healthy & Active",
+  });
+});
+
 // =========================================================================
-// 1. AUTHENTICATION MIDDLEWARE
+// 1. SECURE JWT AUTHENTICATION MIDDLEWARE
 // =========================================================================
 async function protect(req, res, next) {
   try {
-    // Intercept header named 'x-user-id'
-    const userId = req.headers["x-user-id"];
+    // Expects header standard: "Authorization: Bearer <JWT_TOKEN>"
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1];
 
-    if (!userId) {
+    if (!token) {
       return res
         .status(401)
-        .json({ error: "Not authorized. Missing 'x-user-id' header." });
+        .json({ error: "Access denied. No login token provided." });
     }
 
-    const user = await User.findById(userId);
+    // Decode and verify token string using secret signature key
+    const decodedPayload = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Fetch user context by the ID stored inside the payload token block
+    const user = await User.findById(decodedPayload.id);
     if (!user) {
-      return res
-        .status(404)
-        .json({ error: "User not found with provided ID." });
+      return res.status(404).json({ error: "User profile context not found." });
     }
 
-    // Bind authenticated user data context directly onto request object
     req.user = user;
     next();
   } catch (error) {
     res
-      .status(401)
-      .json({ error: "Authentication failed", details: error.message });
+      .status(403)
+      .json({ error: "Invalid or expired token. Please sign in again." });
   }
 }
 
 // =========================================================================
-// HELPER FUNCTIONS (FOR ADDRESS, WISHLIST & CART)
+// HELPER FUNCTIONS (UPDATED FIX FOR DEPRECATION WARNINGS)
 // =========================================================================
 
 async function addAddressData(userId, addressObj) {
@@ -60,7 +71,7 @@ async function addAddressData(userId, addressObj) {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $push: { addresses: addressObj } },
-      { new: true, runValidators: true },
+      { returnDocument: "after", runValidators: true }, // Fixed deprecation option
     ).select("-password");
     return updatedUser;
   } catch (error) {
@@ -70,11 +81,10 @@ async function addAddressData(userId, addressObj) {
 
 async function addToWishlistData(userId, productId) {
   try {
-    // $addToSet acts natively to drop modifications if an item ID already exists
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $addToSet: { wishlist: productId } },
-      { new: true },
+      { returnDocument: "after" }, // Fixed deprecation option
     ).select("-password");
     return updatedUser;
   } catch (error) {
@@ -85,7 +95,6 @@ async function addToWishlistData(userId, productId) {
 async function addToCartData(userId, productId, quantity) {
   try {
     const qty = Number(quantity) || 1;
-    // Inspect whether item array block exists matching current criteria
     const userHasProduct = await User.findOne({
       _id: userId,
       "cart.product": productId,
@@ -95,13 +104,13 @@ async function addToCartData(userId, productId, quantity) {
       return await User.findOneAndUpdate(
         { _id: userId, "cart.product": productId },
         { $inc: { "cart.$.quantity": qty } },
-        { new: true },
+        { returnDocument: "after" }, // Fixed deprecation option
       ).select("-password");
     } else {
       return await User.findByIdAndUpdate(
         userId,
         { $push: { cart: { product: productId, quantity: qty } } },
-        { new: true },
+        { returnDocument: "after" }, // Fixed deprecation option
       ).select("-password");
     }
   } catch (error) {
@@ -110,7 +119,52 @@ async function addToCartData(userId, productId, quantity) {
 }
 
 // =========================================================================
-// ROUTE HANDLERS (PROTECTED BY MIDDLEWARE)
+// AUTHENTICATION ROUTE HANDLERS
+// =========================================================================
+
+// @route   POST /api/auth/login
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // 1. Find user by email
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res
+        .status(401)
+        .json({ error: "Invalid email or password credentials." });
+    }
+
+    // 2. Use the CUSTOM METHOD from your model to check the hashed password
+    const isMatch = await user.comparePassword(password);
+
+    if (!isMatch) {
+      return res
+        .status(401)
+        .json({ error: "Invalid email or password credentials." });
+    }
+
+    // 3. If it matches, generate the token
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET || "SECRET_KEY",
+      {
+        expiresIn: "7d",
+      },
+    );
+
+    res.status(200).json({
+      success: true,
+      token,
+      user: { id: user._id, name: user.name, email: user.email },
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Server error during login." });
+  }
+});
+
+// =========================================================================
+// PROTECTED USER ACTION ROUTE HANDLERS
 // =========================================================================
 
 app.post("/api/users/address", protect, async (req, res) => {
@@ -163,6 +217,36 @@ app.post("/api/users/cart", protect, async (req, res) => {
     res.status(500).json({ error: "Failed to update cart item details." });
   }
 });
+
+// Secure variant profile retrieval tracking context bound from JWT token payload
+// @route   GET /api/users/userProfile/me
+app.get("/api/users/userProfile/me", protect, async (req, res) => {
+  try {
+    const getUserProfile = await getUserProfileData(req.user.id);
+    if (getUserProfile) {
+      res.status(200).json({
+        success: true,
+        data: {
+          addresses: getUserProfile.addresses,
+          wishlist: getUserProfile.wishlist,
+          cart: getUserProfile.cart,
+        },
+      });
+    } else {
+      res
+        .status(404)
+        .json({ error: "User profile profile data context missing." });
+    }
+  } catch (error) {
+    res
+      .status(500)
+      .json({ error: "Failed to fetch session metadata information." });
+  }
+});
+
+// =========================================================================
+// READ-ONLY UNPROTECTED ROUTE CORES
+// =========================================================================
 
 async function createUsers(newUser) {
   try {
@@ -330,7 +414,10 @@ app.get("/api/categories/:categoryId", async (req, res) => {
   }
 });
 
-const Port = process.env.PORT || 5500;
+// =========================================================================
+// ENVIRONMENT OR VERCEL BOOT FORWARDING CONFIG
+// =========================================================================
+const Port = process.env.PORT;
 app.listen(Port, () => {
   console.log("Server is listening at:", Port);
 });
