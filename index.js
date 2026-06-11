@@ -46,7 +46,10 @@ async function protect(req, res, next) {
     }
 
     // Decode and verify token string using secret signature key
-    const decodedPayload = jwt.verify(token, process.env.JWT_SECRET);
+    const decodedPayload = jwt.verify(
+      token,
+      process.env.JWT_SECRET || "SECRET_KEY",
+    );
 
     // Fetch user context by the ID stored inside the payload token block
     const user = await User.findById(decodedPayload.id);
@@ -54,6 +57,7 @@ async function protect(req, res, next) {
       return res.status(404).json({ error: "User profile context not found." });
     }
 
+    // Attach full mongoose document to request object
     req.user = user;
     next();
   } catch (error) {
@@ -72,7 +76,7 @@ async function addAddressData(userId, addressObj) {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $push: { addresses: addressObj } },
-      { returnDocument: "after", runValidators: true }, // Fixed deprecation option
+      { returnDocument: "after", runValidators: true },
     ).select("-password");
     return updatedUser;
   } catch (error) {
@@ -85,7 +89,7 @@ async function addToWishlistData(userId, productId) {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $addToSet: { wishlist: productId } },
-      { returnDocument: "after" }, // Fixed deprecation option
+      { returnDocument: "after" },
     ).select("-password");
     return updatedUser;
   } catch (error) {
@@ -105,15 +109,27 @@ async function addToCartData(userId, productId, quantity) {
       return await User.findOneAndUpdate(
         { _id: userId, "cart.product": productId },
         { $inc: { "cart.$.quantity": qty } },
-        { returnDocument: "after" }, // Fixed deprecation option
+        { returnDocument: "after" },
       ).select("-password");
     } else {
       return await User.findByIdAndUpdate(
         userId,
         { $push: { cart: { product: productId, quantity: qty } } },
-        { returnDocument: "after" }, // Fixed deprecation option
+        { returnDocument: "after" },
       ).select("-password");
     }
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function getUserProfileData(userId) {
+  try {
+    const userProfile = await User.findById(userId)
+      .populate("wishlist")
+      .populate("cart.product")
+      .select("-password");
+    return userProfile;
   } catch (error) {
     throw error;
   }
@@ -136,7 +152,7 @@ app.post("/api/auth/login", async (req, res) => {
         .json({ error: "Invalid email or password credentials." });
     }
 
-    // 2. Use the CUSTOM METHOD from your model to check the hashed password
+    // 2. Fallback check to direct bcrypt comparison avoiding missing methods crash
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
@@ -145,13 +161,11 @@ app.post("/api/auth/login", async (req, res) => {
         .json({ error: "Invalid email or password credentials." });
     }
 
-    // 3. If it matches, generate the token
+    // 3. Generate the token
     const token = jwt.sign(
       { id: user._id },
       process.env.JWT_SECRET || "SECRET_KEY",
-      {
-        expiresIn: "7d",
-      },
+      { expiresIn: "7d" },
     );
 
     res.status(200).json({
@@ -177,7 +191,8 @@ app.post("/api/users/address", protect, async (req, res) => {
         .json({ error: "Missing required address fields." });
     }
 
-    const updatedUser = await addAddressData(req.user.id, {
+    // FIX: Using req.user._id safely references the document identity profile key
+    const updatedUser = await addAddressData(req.user._id, {
       title,
       street,
       area,
@@ -198,7 +213,7 @@ app.post("/api/users/wishlist", protect, async (req, res) => {
       return res.status(400).json({ error: "Product ID is required." });
     }
 
-    const updatedUser = await addToWishlistData(req.user.id, productId);
+    const updatedUser = await addToWishlistData(req.user._id, productId);
     res.status(200).json({ success: true, data: updatedUser.wishlist });
   } catch (error) {
     res.status(500).json({ error: "Failed to update wishlist details." });
@@ -212,7 +227,7 @@ app.post("/api/users/cart", protect, async (req, res) => {
       return res.status(400).json({ error: "Product ID is required." });
     }
 
-    const updatedUser = await addToCartData(req.user.id, productId, quantity);
+    const updatedUser = await addToCartData(req.user._id, productId, quantity);
     res.status(200).json({ success: true, data: updatedUser.cart });
   } catch (error) {
     res.status(500).json({ error: "Failed to update cart item details." });
@@ -223,20 +238,19 @@ app.post("/api/users/cart", protect, async (req, res) => {
 // @route   GET /api/users/userProfile/me
 app.get("/api/users/userProfile/me", protect, async (req, res) => {
   try {
-    const getUserProfile = await getUserProfileData(req.user.id);
+    // FIX: Swapped req.user.id for req.user._id to fix the 403 / 500 mapping error
+    const getUserProfile = await getUserProfileData(req.user._id);
     if (getUserProfile) {
       res.status(200).json({
         success: true,
         data: {
-          addresses: getUserProfile.addresses,
-          wishlist: getUserProfile.wishlist,
-          cart: getUserProfile.cart,
+          addresses: getUserProfile.addresses || [],
+          wishlist: getUserProfile.wishlist || [],
+          cart: getUserProfile.cart || [],
         },
       });
     } else {
-      res
-        .status(404)
-        .json({ error: "User profile profile data context missing." });
+      res.status(404).json({ error: "User profile data context missing." });
     }
   } catch (error) {
     res
@@ -279,7 +293,7 @@ async function viewAllProducts() {
 app.get("/api/products", async (req, res) => {
   try {
     const allProducts = await viewAllProducts();
-    if (allProducts != 0) {
+    if (allProducts.length !== 0) {
       res.json(allProducts);
     } else {
       res.status(404).json({ error: "Products are not found." });
@@ -301,7 +315,7 @@ async function viewProduct(productId) {
 app.get("/api/products/:productId", async (req, res) => {
   try {
     const getProduct = await viewProduct(req.params.productId);
-    if (getProduct != 0) {
+    if (getProduct) {
       res.json(getProduct);
     } else {
       res.status(404).json({ error: "Product not found." });
@@ -323,7 +337,7 @@ async function viewUser(userId) {
 app.get("/api/users/:userId", async (req, res) => {
   try {
     const getUser = await viewUser(req.params.userId);
-    if (getUser != 0) {
+    if (getUser) {
       res.json(getUser);
     } else {
       res.status(404).json({ error: "User not found." });
@@ -333,22 +347,10 @@ app.get("/api/users/:userId", async (req, res) => {
   }
 });
 
-async function getUserProfileData(userId) {
-  try {
-    const userProfile = await User.findById(userId)
-      .populate("wishlist")
-      .populate("cart.product")
-      .select("-password");
-    return userProfile;
-  } catch (error) {
-    throw error;
-  }
-}
-
 app.get("/api/users/userProfile/:userId", async (req, res) => {
   try {
     const getUserProfile = await getUserProfileData(req.params.userId);
-    if (getUserProfile != 0) {
+    if (getUserProfile) {
       res.status(200).json({
         success: true,
         data: {
@@ -418,7 +420,7 @@ app.get("/api/categories/:categoryId", async (req, res) => {
 // =========================================================================
 // ENVIRONMENT OR VERCEL BOOT FORWARDING CONFIG
 // =========================================================================
-const Port = process.env.PORT;
+const Port = process.env.PORT || 5000;
 app.listen(Port, () => {
   console.log("Server is listening at:", Port);
 });
