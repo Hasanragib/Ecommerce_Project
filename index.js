@@ -2,6 +2,7 @@ const express = require("express");
 const app = express();
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 
 require("dotenv").config();
 
@@ -136,7 +137,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     // 2. Use the CUSTOM METHOD from your model to check the hashed password
-    const isMatch = await user.comparePassword(password);
+    const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
       return res
