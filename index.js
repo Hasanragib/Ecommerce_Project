@@ -105,19 +105,24 @@ async function addToCartData(userId, productId, quantity) {
       "cart.product": productId,
     });
 
+    let updatedUser;
+
     if (userHasProduct) {
-      return await User.findOneAndUpdate(
+      updatedUser = await User.findOneAndUpdate(
         { _id: userId, "cart.product": productId },
-        { $inc: { "cart.$.quantity": qty } },
+        { $set: { "cart.$.quantity": qty } },
         { returnDocument: "after" },
       ).select("-password");
     } else {
-      return await User.findByIdAndUpdate(
+      updatedUser = await User.findByIdAndUpdate(
         userId,
         { $push: { cart: { product: productId, quantity: qty } } },
         { returnDocument: "after" },
       ).select("-password");
     }
+
+    await updatedUser.populate("cart.product");
+    return updatedUser;
   } catch (error) {
     throw error;
   }
