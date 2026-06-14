@@ -264,6 +264,49 @@ app.get("/api/users/userProfile/me", protect, async (req, res) => {
   }
 });
 
+// Delete Routes.
+app.delete("/api/users/cart", protect, async (req, res) => {
+  try {
+    const { productId } = req.body;
+    if (!productId) {
+      return res.status(400).json({ error: "Product ID is required." });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user._id,
+      { $pull: { cart: { product: productId } } },
+      { returnDocument: "after" },
+    )
+      .populate("cart.product")
+      .select("-password");
+
+    res.status(200).json({ success: true, data: updatedUser.cart });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to remove cart item." });
+  }
+});
+
+app.delete("/api/users/wishlist", protect, async (req, res) => {
+  try {
+    const { productId } = req.body;
+    if (!productId) {
+      return res.status(400).json({ error: "Product ID is required." });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user._id,
+      { $pull: { wishlist: productId } },
+      { returnDocument: "after" },
+    )
+      .populate("wishlist")
+      .select("-password");
+
+    res.status(200).json({ success: true, data: updatedUser.wishlist });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to remove wishlist item." });
+  }
+});
+
 // =========================================================================
 // READ-ONLY UNPROTECTED ROUTE CORES
 // =========================================================================
