@@ -90,7 +90,9 @@ async function addToWishlistData(userId, productId) {
       userId,
       { $addToSet: { wishlist: productId } },
       { returnDocument: "after" },
-    ).select("-password");
+    )
+      .populate("wishlist")
+      .select("-password");
     return updatedUser;
   } catch (error) {
     throw error;
