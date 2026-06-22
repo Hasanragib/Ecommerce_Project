@@ -146,6 +146,52 @@ async function getUserProfileData(userId) {
 // AUTHENTICATION ROUTE HANDLERS
 // =========================================================================
 
+// @route   POST /api/auth/signup
+app.post("/api/auth/signup", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+
+    if (!name || !email || !password) {
+      return res
+        .status(400)
+        .json({ error: "All fields (name, email, password) are required." });
+    }
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res
+        .status(400)
+        .json({ error: "An account with this email already exists." });
+    }
+
+    //user schema handles the hashing 
+    const newUser = new User({
+      name,
+      email,
+      password,
+      addresses: [],
+      wishlist: [],
+      cart: [],
+    });
+
+    const savedUser = await newUser.save();
+
+    const token = jwt.sign(
+      { id: savedUser._id },
+      process.env.JWT_SECRET || "SECRET_KEY",
+      { expiresIn: "7d" },
+    );
+
+    res.status(201).json({
+      success: true,
+      token,
+      user: { id: savedUser._id, name: savedUser.name, email: savedUser.email },
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Server error during account creation." });
+  }
+});
+
 // @route   POST /api/auth/login
 app.post("/api/auth/login", async (req, res) => {
   try {
